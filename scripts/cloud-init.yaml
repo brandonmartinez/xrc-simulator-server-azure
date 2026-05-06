@@ -1,0 +1,100 @@
+#cloud-config
+# Cloud-init configuration for xRC Simulator Server
+# This automatically provisions the VM with all required dependencies
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - unzip
+  - curl
+  - wget
+  - screen
+  - htop
+  - ufw
+
+# Create a dedicated user directory for the simulator
+runcmd:
+  # Create xRC Simulator directory
+  - mkdir -p /opt/xrc-simulator
+  - chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} /opt/xrc-simulator
+
+  # Download and install xRC Simulator if URL is provided
+  - |
+    if [ -n "${XRC_DOWNLOAD_URL}" ]; then
+      echo "Downloading xRC Simulator from: ${XRC_DOWNLOAD_URL}"
+      wget -q -O /opt/xrc-simulator/xrc-server.zip "${XRC_DOWNLOAD_URL}"
+      cd /opt/xrc-simulator
+      unzip -o xrc-server.zip
+      rm -f xrc-server.zip
+      chmod +x /opt/xrc-simulator/*.x86_64 2>/dev/null || true
+      chmod +x /opt/xrc-simulator/*.sh 2>/dev/null || true
+      chown -R ${ADMIN_USERNAME}:${ADMIN_USERNAME} /opt/xrc-simulator
+      echo "xRC Simulator installed successfully"
+    else
+      echo "No XRC_DOWNLOAD_URL provided - upload the simulator manually to /opt/xrc-simulator/"
+    fi
+
+  # Create a convenience start script
+  - |
+    cat > /opt/xrc-simulator/start-server.sh << 'SCRIPT'
+    #!/bin/bash
+    # Start xRC Simulator Server in a screen session
+    cd /opt/xrc-simulator
+
+    # Find the server executable
+    SERVER_BIN=$(find . -name "*.x86_64" -type f | head -1)
+    if [ -z "$SERVER_BIN" ]; then
+      echo "ERROR: No server binary found in /opt/xrc-simulator/"
+      echo "Upload the Linux server zip and unzip it here."
+      exit 1
+    fi
+
+    echo "Starting xRC Simulator Server: $SERVER_BIN"
+    echo "Port: ${GAME_UDP_PORT:-11115} (UDP)"
+    echo ""
+    echo "Server running in screen session 'xrc-server'"
+    echo "  Attach:  screen -r xrc-server"
+    echo "  Detach:  Ctrl+A, then D"
+
+    screen -dmS xrc-server bash -c "$SERVER_BIN -batchmode -nographics; exec bash"
+    echo "✓ Server started!"
+    SCRIPT
+    chmod +x /opt/xrc-simulator/start-server.sh
+    chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} /opt/xrc-simulator/start-server.sh
+
+  # Create a systemd service for auto-start on boot (optional)
+  - |
+    cat > /etc/systemd/system/xrc-simulator.service << 'SERVICE'
+    [Unit]
+    Description=xRC Simulator Game Server
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=${ADMIN_USERNAME}
+    WorkingDirectory=/opt/xrc-simulator
+    ExecStart=/bin/bash -c 'SERVER_BIN=$(find /opt/xrc-simulator -name "*.x86_64" -type f | head -1); exec $SERVER_BIN -batchmode -nographics'
+    Restart=on-failure
+    RestartSec=10
+
+    [Install]
+    WantedBy=multi-user.target
+    SERVICE
+    systemctl daemon-reload
+
+  # Enable the service if the binary exists
+  - |
+    if find /opt/xrc-simulator -name "*.x86_64" -type f | grep -q .; then
+      systemctl enable xrc-simulator
+      systemctl start xrc-simulator
+      echo "✓ xRC Simulator service started and enabled on boot"
+    else
+      echo "xRC Simulator binary not found - service configured but not started"
+      echo "After uploading the binary, run: sudo systemctl enable --now xrc-simulator"
+    fi
+
+  # Signal that provisioning is complete
+  - echo "=== xRC Simulator VM provisioning complete ===" | tee /var/log/xrc-provision.log
+
+final_message: "xRC Simulator server provisioning complete. Cloud-init finished in $UPTIME seconds."
