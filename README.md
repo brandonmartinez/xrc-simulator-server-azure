@@ -42,8 +42,8 @@ That's it! The server will be provisioned with the xRC Simulator automatically d
 | `SSH_SOURCE_CIDR` | `0.0.0.0/0` | Restrict SSH access by IP |
 | `GAME_SOURCE_CIDR` | `0.0.0.0/0` | Restrict game access by IP |
 | `XRC_DOWNLOAD_URL` | Latest v19.2c | Download URL for server zip |
-| `SHUTDOWN_TIME` | `0400` | Daily auto-shutdown (24h ET) |
-| `START_TIME` | `0800` | Daily auto-start (24h ET) |
+| `XRC_SERVER_USERNAME` | *(empty)* | Admin name for server chat commands |
+| `XRC_SERVER_PASSWORD` | *(empty)* | Password players enter to join |
 
 ## VM Size Recommendations
 
@@ -80,19 +80,23 @@ az vm start --resource-group xrc-simulator-rg --name xrc-simulator-vm
 ./teardown.sh
 ```
 
+## Redeployment
+
+Running `./deploy.sh` again is fully idempotent:
+- Infrastructure changes are applied incrementally
+- The xRC Simulator binary is re-downloaded (if URL changed) and the server config is updated
+- The systemd service is restarted with the new settings
+
+This means you can update `XRC_DOWNLOAD_URL`, `XRC_SERVER_PASSWORD`, or other settings in `.env` and simply re-run `./deploy.sh`.
+
 ## Cost Estimates
 
 - **Standard_B2s**: ~$0.042/hour (~$1.01/day if running 24h)
 - **Standard_D2as_v5**: ~$0.09/hour (~$2.16/day)
 - **Public IP**: ~$0.005/hour when allocated
 - **Egress**: First 100GB/month free, then ~$0.087/GB
-- **Azure Automation (auto-start)**: Free tier (500 min/month)
 
-**With auto-shutdown (4 AM–8 AM ET off) — saves ~17% on compute:**
-- **Standard_B2s**: ~$0.84/day (~$25/month)
-- **Standard_D2as_v5**: ~$1.80/day (~$54/month)
-
-**Tip**: The VM is automatically deallocated from 4 AM to 8 AM ET by default. The static public IP and DNS label persist through deallocations — players don't need to update their connection info.
+**Tip**: Deallocate the VM when not in use to stop compute charges. The static public IP persists through deallocations — players don't need to update their connection info.
 
 ## Architecture
 
@@ -106,10 +110,8 @@ Azure Resource Group
 │           └── ICMP (ping)
 ├── Public IP (Static - persists through deallocations)
 ├── Network Interface
-├── Virtual Machine (Ubuntu 22.04 LTS)
-│   └── cloud-init → xRC Simulator (systemd service)
-├── DevTestLab Schedule (auto-shutdown at 4 AM ET)
-└── Automation Account (auto-start at 8 AM ET)
+└── Virtual Machine (Ubuntu 22.04 LTS)
+    └── xRC Simulator (systemd service via setup-xrc.sh)
 ```
 
 ## Based On

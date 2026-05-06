@@ -18,9 +18,6 @@ param sshPublicKey string
 @description('Network interface ID')
 param nicId string
 
-@description('Cloud-init script content')
-param cloudInitContent string = ''
-
 resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
   name: vmName
   location: location
@@ -31,7 +28,6 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
     osProfile: {
       computerName: vmName
       adminUsername: adminUsername
-      customData: !empty(cloudInitContent) ? base64(cloudInitContent) : null
       linuxConfiguration: {
         disablePasswordAuthentication: true
         ssh: {

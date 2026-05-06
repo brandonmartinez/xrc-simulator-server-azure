@@ -56,8 +56,6 @@ echo "  VM Size:        ${VM_SIZE:-Standard_B2s}"
 echo "  Admin User:     $ADMIN_USERNAME"
 echo "  Game Port:      ${GAME_UDP_PORT:-11115} (UDP)"
 echo "  SSH Access:     ${SSH_SOURCE_CIDR:-0.0.0.0/0}"
-echo "  Auto-Shutdown:  ${SHUTDOWN_TIME:-0400} ET (deallocates VM)"
-echo "  Auto-Start:     ${START_TIME:-0800} ET"
 echo ""
 
 read -p "Proceed with deployment? (y/n): " CONFIRM
@@ -80,6 +78,7 @@ echo "Step 2: Deploying infrastructure (this may take a few minutes)..."
 DEPLOYMENT_OUTPUT=$(az deployment group create \
     --resource-group "$RESOURCE_GROUP" \
     --template-file "$SCRIPT_DIR/infra/main.bicep" \
+    --mode Incremental \
     --parameters \
         location="$LOCATION" \
         vmName="${VM_NAME}" \
@@ -89,114 +88,34 @@ DEPLOYMENT_OUTPUT=$(az deployment group create \
         gameUdpPort="${GAME_UDP_PORT:-11115}" \
         sshSourceCidr="${SSH_SOURCE_CIDR:-0.0.0.0/0}" \
         gameSourceCidr="${GAME_SOURCE_CIDR:-0.0.0.0/0}" \
-        xrcDownloadUrl="${XRC_DOWNLOAD_URL:-}" \
-        enableAutoShutdown=true \
-        shutdownTime="${SHUTDOWN_TIME:-0400}" \
     --query 'properties.outputs' \
     --output json)
 
 echo "✓ Infrastructure deployed successfully!"
 
-# Set up auto-start via Azure Automation
+# Configure and install xRC Simulator on VM via run-command
+# This runs on every deploy (idempotent) — handles both first deploy and updates
 echo ""
-echo "Step 3: Configuring auto-start schedule..."
+echo "Step 2b: Configuring xRC Simulator on VM..."
 
-AUTOMATION_ACCOUNT="${VM_NAME}-automation"
-RUNBOOK_NAME="StartXrcSimulatorVM"
-START_TIME_VALUE="${START_TIME:-0800}"
-# Format start time as HH:MM for schedule
-START_HOUR="${START_TIME_VALUE:0:2}"
-START_MIN="${START_TIME_VALUE:2:2}"
+# Render the setup script with current env values
+export XRC_ADMIN_USERNAME="$ADMIN_USERNAME"
+export XRC_DOWNLOAD_URL="${XRC_DOWNLOAD_URL:-}"
+export XRC_GAME_PORT="${GAME_UDP_PORT:-11115}"
+export XRC_SERVER_PASSWORD="${XRC_SERVER_PASSWORD:-}"
+export XRC_SERVER_USERNAME="${XRC_SERVER_USERNAME:-}"
+envsubst '${XRC_ADMIN_USERNAME} ${XRC_DOWNLOAD_URL} ${XRC_GAME_PORT} ${XRC_SERVER_PASSWORD} ${XRC_SERVER_USERNAME}' \
+    < "$SCRIPT_DIR/scripts/setup-xrc.sh" \
+    > "$SCRIPT_DIR/scripts/.setup-xrc-rendered.sh"
 
-# Create automation account with system-assigned identity
-az automation account create \
-    --name "$AUTOMATION_ACCOUNT" \
+az vm run-command invoke \
     --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --output none 2>/dev/null || true
-
-# Enable system-assigned managed identity
-az automation account update \
-    --name "$AUTOMATION_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --identity-type SystemAssigned \
+    --name "$VM_NAME" \
+    --command-id RunShellScript \
+    --scripts @"$SCRIPT_DIR/scripts/.setup-xrc-rendered.sh" \
     --output none
 
-# Get the automation account's principal ID
-PRINCIPAL_ID=$(az automation account show \
-    --name "$AUTOMATION_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --query 'identity.principalId' -o tsv)
-
-# Assign VM Contributor role to the automation account
-az role assignment create \
-    --assignee-object-id "$PRINCIPAL_ID" \
-    --assignee-principal-type ServicePrincipal \
-    --role "Virtual Machine Contributor" \
-    --scope "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$RESOURCE_GROUP" \
-    --output none 2>/dev/null || true
-
-# Create the runbook
-az automation runbook create \
-    --automation-account-name "$AUTOMATION_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$RUNBOOK_NAME" \
-    --type PowerShell \
-    --output none 2>/dev/null || true
-
-# Write runbook content
-RUNBOOK_CONTENT=$(cat <<EOF
-# Start xRC Simulator VM using managed identity
-Connect-AzAccount -Identity
-Start-AzVM -ResourceGroupName "$RESOURCE_GROUP" -Name "$VM_NAME"
-Write-Output "VM $VM_NAME started successfully"
-EOF
-)
-
-echo "$RUNBOOK_CONTENT" > /tmp/xrc-start-runbook.ps1
-az automation runbook replace-content \
-    --automation-account-name "$AUTOMATION_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$RUNBOOK_NAME" \
-    --content @/tmp/xrc-start-runbook.ps1 \
-    --output none
-rm -f /tmp/xrc-start-runbook.ps1
-
-# Publish the runbook
-az automation runbook publish \
-    --automation-account-name "$AUTOMATION_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$RUNBOOK_NAME" \
-    --output none
-
-# Create a daily schedule (start tomorrow at the configured time)
-TOMORROW=$(date -u -v+1d +%Y-%m-%dT${START_HOUR}:${START_MIN}:00Z 2>/dev/null || date -u -d "+1 day" +%Y-%m-%dT${START_HOUR}:${START_MIN}:00Z)
-az automation schedule create \
-    --automation-account-name "$AUTOMATION_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "DailyAutoStart" \
-    --frequency Day \
-    --interval 1 \
-    --start-time "$TOMORROW" \
-    --time-zone "Eastern Standard Time" \
-    --description "Daily auto-start for xRC Simulator VM at ${START_HOUR}:${START_MIN} ET" \
-    --output none 2>/dev/null || true
-
-# Link schedule to runbook
-az automation runbook start \
-    --automation-account-name "$AUTOMATION_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$RUNBOOK_NAME" \
-    --output none 2>/dev/null || true
-
-# Create job schedule (link runbook to schedule)
-SCHEDULE_LINK=$(az rest \
-    --method PUT \
-    --uri "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Automation/automationAccounts/$AUTOMATION_ACCOUNT/jobSchedules/$(uuidgen || python3 -c 'import uuid; print(uuid.uuid4())')?api-version=2023-11-01" \
-    --body "{\"properties\":{\"runbook\":{\"name\":\"$RUNBOOK_NAME\"},\"schedule\":{\"name\":\"DailyAutoStart\"}}}" \
-    --output none 2>/dev/null || true)
-
-echo "✓ Auto-start schedule configured (${START_HOUR}:${START_MIN} ET daily)"
+echo "✓ xRC Simulator configured on VM"
 
 # Extract outputs
 PUBLIC_IP=$(echo "$DEPLOYMENT_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['publicIpAddress']['value'])" 2>/dev/null || echo "unknown")
@@ -219,11 +138,10 @@ echo "=========================================="
 echo ""
 echo "Next Steps:"
 if [[ -n "${XRC_DOWNLOAD_URL:-}" ]]; then
-    echo "  The xRC Simulator is being automatically installed via cloud-init."
-    echo "  Wait ~2-3 minutes for provisioning to complete, then:"
+    echo "  The xRC Simulator has been installed and started."
     echo "    1. SSH in: ssh ${ADMIN_USERNAME}@${PUBLIC_IP}"
     echo "    2. Check status: sudo systemctl status xrc-simulator"
-    echo "    3. Or manually: /opt/xrc-simulator/start-server.sh"
+    echo "    3. View logs: journalctl -u xrc-simulator -f"
 else
     echo "  1. SSH into the server: ssh ${ADMIN_USERNAME}@${PUBLIC_IP}"
     echo "  2. Upload the xRC Simulator Linux Server zip to /opt/xrc-simulator/"
