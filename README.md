@@ -42,6 +42,8 @@ That's it! The server will be provisioned with the xRC Simulator automatically d
 | `SSH_SOURCE_CIDR` | `0.0.0.0/0` | Restrict SSH access by IP |
 | `GAME_SOURCE_CIDR` | `0.0.0.0/0` | Restrict game access by IP |
 | `XRC_DOWNLOAD_URL` | Latest v19.2c | Download URL for server zip |
+| `SHUTDOWN_TIME` | `0400` | Daily auto-shutdown (24h ET) |
+| `START_TIME` | `0800` | Daily auto-start (24h ET) |
 
 ## VM Size Recommendations
 
@@ -80,12 +82,17 @@ az vm start --resource-group xrc-simulator-rg --name xrc-simulator-vm
 
 ## Cost Estimates
 
-- **Standard_B2s**: ~$0.042/hour (~$1/day if running 24h)
+- **Standard_B2s**: ~$0.042/hour (~$1.01/day if running 24h)
 - **Standard_D2as_v5**: ~$0.09/hour (~$2.16/day)
 - **Public IP**: ~$0.005/hour when allocated
 - **Egress**: First 100GB/month free, then ~$0.087/GB
+- **Azure Automation (auto-start)**: Free tier (500 min/month)
 
-**Tip**: Deallocate the VM when not in use to avoid compute charges. Only disk storage costs apply when stopped.
+**With auto-shutdown (4 AM–8 AM ET off) — saves ~17% on compute:**
+- **Standard_B2s**: ~$0.84/day (~$25/month)
+- **Standard_D2as_v5**: ~$1.80/day (~$54/month)
+
+**Tip**: The VM is automatically deallocated from 4 AM to 8 AM ET by default. The static public IP and DNS label persist through deallocations — players don't need to update their connection info.
 
 ## Architecture
 
@@ -97,10 +104,12 @@ Azure Resource Group
 │           ├── SSH (TCP/22)
 │           ├── Game Traffic (UDP/11115)
 │           └── ICMP (ping)
-├── Public IP (Static)
+├── Public IP (Static - persists through deallocations)
 ├── Network Interface
-└── Virtual Machine (Ubuntu 22.04 LTS)
-    └── cloud-init → xRC Simulator (systemd service)
+├── Virtual Machine (Ubuntu 22.04 LTS)
+│   └── cloud-init → xRC Simulator (systemd service)
+├── DevTestLab Schedule (auto-shutdown at 4 AM ET)
+└── Automation Account (auto-start at 8 AM ET)
 ```
 
 ## Based On

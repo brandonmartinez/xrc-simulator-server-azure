@@ -31,6 +31,12 @@ param gameSourceCidr string = '0.0.0.0/0'
 @description('Download URL for xRC Simulator Linux server (leave empty to upload manually)')
 param xrcDownloadUrl string = ''
 
+@description('Enable auto-shutdown schedule')
+param enableAutoShutdown bool = true
+
+@description('Auto-shutdown time in HHmm format (24-hour, Eastern Time)')
+param shutdownTime string = '0400'
+
 // Generate cloud-init with runtime parameters
 var cloudInitContent = format('''#cloud-config
 package_update: true
@@ -125,6 +131,17 @@ module vm 'modules/vm.bicep' = {
     sshPublicKey: sshPublicKey
     nicId: network.outputs.nicId
     cloudInitContent: cloudInitContent
+  }
+}
+
+// Schedule module - Auto-shutdown (deallocates VM to save costs)
+module schedule 'modules/schedule.bicep' = if (enableAutoShutdown) {
+  name: 'schedule-deployment'
+  params: {
+    location: location
+    vmName: vmName
+    vmId: vm.outputs.vmId
+    shutdownTime: shutdownTime
   }
 }
 
