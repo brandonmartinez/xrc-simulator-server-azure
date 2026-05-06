@@ -88,6 +88,7 @@ DEPLOYMENT_OUTPUT=$(az deployment group create \
         gameUdpPort="${GAME_UDP_PORT:-11115}" \
         sshSourceCidr="${SSH_SOURCE_CIDR:-0.0.0.0/0}" \
         gameSourceCidr="${GAME_SOURCE_CIDR:-0.0.0.0/0}" \
+        webAdminPort="${WEB_ADMIN_PORT:-8080}" \
     --query 'properties.outputs' \
     --output json)
 
@@ -104,9 +105,24 @@ export XRC_DOWNLOAD_URL="${XRC_DOWNLOAD_URL:-}"
 export XRC_GAME_PORT="${GAME_UDP_PORT:-11115}"
 export XRC_SERVER_PASSWORD="${XRC_SERVER_PASSWORD:-}"
 export XRC_SERVER_USERNAME="${XRC_SERVER_USERNAME:-}"
-envsubst '${XRC_ADMIN_USERNAME} ${XRC_DOWNLOAD_URL} ${XRC_GAME_PORT} ${XRC_SERVER_PASSWORD} ${XRC_SERVER_USERNAME}' \
+export XRC_GAME="${XRC_GAME:-22}"
+export XRC_WEB_ADMIN_PORT="${WEB_ADMIN_PORT:-8080}"
+export XRC_WEB_ADMIN_BIND="${WEB_ADMIN_BIND:-0.0.0.0}"
+envsubst '${XRC_ADMIN_USERNAME} ${XRC_DOWNLOAD_URL} ${XRC_GAME_PORT} ${XRC_SERVER_PASSWORD} ${XRC_SERVER_USERNAME} ${XRC_GAME} ${XRC_WEB_ADMIN_PORT} ${XRC_WEB_ADMIN_BIND}' \
     < "$SCRIPT_DIR/scripts/setup-xrc.sh" \
     > "$SCRIPT_DIR/scripts/.setup-xrc-rendered.sh"
+
+# Upload web-admin.py to the VM
+echo "Uploading web-admin.py..."
+az vm run-command invoke \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$VM_NAME" \
+    --command-id RunShellScript \
+    --scripts "cat > /tmp/web-admin.py << 'WEBADMINEOF'
+$(cat "$SCRIPT_DIR/scripts/web-admin.py")
+WEBADMINEOF
+chmod +x /tmp/web-admin.py" \
+    --output none
 
 az vm run-command invoke \
     --resource-group "$RESOURCE_GROUP" \
@@ -128,6 +144,7 @@ echo "=========================================="
 echo ""
 echo "  Public IP:      $PUBLIC_IP"
 echo "  Game Endpoint:  $PUBLIC_IP:${GAME_UDP_PORT:-11115} (UDP)"
+echo "  Web Admin:      http://$PUBLIC_IP:${WEB_ADMIN_PORT:-8080}"
 echo "  SSH Command:    ssh ${ADMIN_USERNAME}@${PUBLIC_IP}"
 echo ""
 echo "  Resource Group: $RESOURCE_GROUP"

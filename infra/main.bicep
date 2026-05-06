@@ -28,6 +28,9 @@ param sshSourceCidr string = '0.0.0.0/0'
 @description('Source CIDR for game traffic')
 param gameSourceCidr string = '0.0.0.0/0'
 
+@description('TCP port for web admin interface')
+param webAdminPort int = 8080
+
 // Network module - VNet, NSG, Public IP, NIC
 module network 'modules/network.bicep' = {
   name: 'network-deployment'
@@ -37,6 +40,7 @@ module network 'modules/network.bicep' = {
     gameUdpPort: gameUdpPort
     sshSourceCidr: sshSourceCidr
     gameSourceCidr: gameSourceCidr
+    webAdminPort: webAdminPort
   }
 }
 
@@ -59,3 +63,4 @@ output fqdn string = network.outputs.fqdn
 output vmName string = vm.outputs.vmName
 output sshCommand string = 'ssh ${adminUsername}@${network.outputs.publicIpAddress}'
 output gameEndpoint string = '${network.outputs.publicIpAddress}:${gameUdpPort}'
+output webAdminUrl string = 'http://${network.outputs.publicIpAddress}:${webAdminPort}'

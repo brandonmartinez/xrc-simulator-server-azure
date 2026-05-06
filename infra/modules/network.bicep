@@ -15,6 +15,9 @@ param sshSourceCidr string = '0.0.0.0/0'
 @description('Source CIDR for game traffic')
 param gameSourceCidr string = '0.0.0.0/0'
 
+@description('TCP port for web admin interface')
+param webAdminPort int = 8080
+
 // Network Security Group
 resource nsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   name: '${baseName}-nsg'
@@ -57,6 +60,19 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
           sourcePortRange: '*'
           destinationPortRange: '*'
           sourceAddressPrefix: '*'
+          destinationAddressPrefix: '*'
+        }
+      }
+      {
+        name: 'AllowWebAdmin'
+        properties: {
+          priority: 1300
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: string(webAdminPort)
+          sourceAddressPrefix: sshSourceCidr
           destinationAddressPrefix: '*'
         }
       }

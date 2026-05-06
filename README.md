@@ -44,6 +44,9 @@ That's it! The server will be provisioned with the xRC Simulator automatically d
 | `XRC_DOWNLOAD_URL` | Latest v19.2c | Download URL for server zip |
 | `XRC_SERVER_USERNAME` | *(empty)* | Admin name for server chat commands |
 | `XRC_SERVER_PASSWORD` | *(empty)* | Password players enter to join |
+| `XRC_GAME` | `22` | Game number (0-22, see game list below) |
+| `WEB_ADMIN_PORT` | `8080` | Port for the web admin interface |
+| `WEB_ADMIN_BIND` | `0.0.0.0` | Bind address (`0.0.0.0` = public, `127.0.0.1` = SSH tunnel only) |
 
 ## VM Size Recommendations
 
@@ -54,6 +57,43 @@ That's it! The server will be provisioned with the xRC Simulator automatically d
 | `Standard_D2as_v5` | 2 | 8GB | Dedicated | Reliable tournament hosting |
 
 The xRC Simulator with 6 players uses ~85% of a single vCPU at 25ms update rate. `Standard_B2s` provides 2 burstable vCPUs — adequate for most team practice sessions. For tournaments or consistent low-latency performance, use `Standard_D2as_v5`.
+
+## Web Admin Interface
+
+The server includes a lightweight web admin UI for managing the xRC Simulator without SSH access.
+
+**Access:** `http://<PUBLIC_IP>:8080` (protected by Basic Auth using `XRC_SERVER_USERNAME` / `XRC_SERVER_PASSWORD`)
+
+**Features:**
+- View server status (active/inactive)
+- Start / Stop / Restart the xRC Simulator service
+- Change the active game and restart
+- View recent server logs
+
+**Security Options:**
+- **Public access** (default): Set `WEB_ADMIN_BIND=0.0.0.0` — access restricted by NSG to `SSH_SOURCE_CIDR`
+- **SSH tunnel only** (recommended for production): Set `WEB_ADMIN_BIND=127.0.0.1`, then:
+  ```bash
+  ssh -L 8080:localhost:8080 azureuser@<PUBLIC_IP>
+  # Visit http://localhost:8080
+  ```
+
+## Available Games
+
+| # | Game | # | Game |
+|---|------|---|------|
+| 0 | Splash | 12 | Power Play |
+| 1 | Relic Recovery | 13 | Charged Up |
+| 2 | Rover Ruckus | 14 | Over Under |
+| 3 | Skystone | 15 | CENTERSTAGE |
+| 4 | Infinite Recharge | 16 | Crescendo |
+| 5 | Change Up | 17 | High Stakes |
+| 6 | Bot Royale | 18 | INTO THE DEEP |
+| 7 | Ultimate Goal | 19 | REEFSCAPE |
+| 8 | Tipping Point | 20 | Push Back |
+| 9 | Freight Frenzy | 21 | DECODE |
+| 10 | Rapid React | 22 | REBUILT |
+| 11 | Spin Up | | |
 
 ## Managing the Server
 
@@ -107,11 +147,13 @@ Azure Resource Group
 │       └── Network Security Group
 │           ├── SSH (TCP/22)
 │           ├── Game Traffic (UDP/11115)
+│           ├── Web Admin (TCP/8080)
 │           └── ICMP (ping)
 ├── Public IP (Static - persists through deallocations)
 ├── Network Interface
 └── Virtual Machine (Ubuntu 22.04 LTS)
-    └── xRC Simulator (systemd service via setup-xrc.sh)
+    ├── xRC Simulator (systemd service via setup-xrc.sh)
+    └── xRC Web Admin (systemd service on port 8080)
 ```
 
 ## Based On
