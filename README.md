@@ -41,12 +41,16 @@ That's it! The server will be provisioned with the xRC Simulator automatically d
 | `GAME_UDP_PORT` | `11115` | UDP port for game traffic |
 | `SSH_SOURCE_CIDR` | `0.0.0.0/0` | Restrict SSH access by IP |
 | `GAME_SOURCE_CIDR` | `0.0.0.0/0` | Restrict game access by IP |
-| `XRC_DOWNLOAD_URL` | Latest v19.2c | Download URL for server zip |
+| `XRC_DOWNLOAD_URL` | Latest v19.2c | Download URL for **initial** server install. Subsequent updates happen via the web UI. |
 | `XRC_SERVER_USERNAME` | *(empty)* | Admin name for server chat commands |
 | `XRC_SERVER_PASSWORD` | *(empty)* | Password players enter to join |
 | `XRC_GAME` | `22` | Game number (0-22, see game list below) |
+| `XRC_SERVER_NAME` | `xRC Azure Server` | Display name shown in the xRC in-game server browser. Can also be edited from the web admin UI; web-UI changes are preserved across subsequent `./deploy.sh` runs. |
 | `WEB_ADMIN_PORT` | `8080` | Port for the web admin interface |
 | `WEB_ADMIN_BIND` | `0.0.0.0` | Bind address (`0.0.0.0` = public, `127.0.0.1` = SSH tunnel only) |
+| `XRC_BACKUP_RETENTION` | `3` | How many previous installs to keep under `/opt/xrc-simulator-backups/` when updating via the web UI. Each backup is ~225 MB. |
+| `XRC_DAILY_RESTART_ENABLED` | `true` | Install a systemd timer that restarts the xRC service daily (mitigates the engine's documented memory/physics drift over long uptime). |
+| `XRC_DAILY_RESTART_TIME` | `04:00` | 24-hour `HH:MM` time-of-day for the daily restart, interpreted in `America/New_York`. |
 
 ## VM Size Recommendations
 
@@ -68,7 +72,57 @@ The server includes a lightweight web admin UI for managing the xRC Simulator wi
 - View server status (active/inactive)
 - Start / Stop / Restart the xRC Simulator service
 - Change the active game and restart
+- Change the server name shown in the xRC server browser and restart
+- **Update the xRC server install from the web UI** (see below)
 - View recent server logs
+
+### Updating the xRC Server from the Web UI
+
+The "Update Server" card on the admin page lets you upgrade (or
+downgrade) the xRC binary without redeploying the VM.
+
+- The card shows the **installed** version and the **latest** version
+  detected from <https://xrcsimulator.org/downloads/>. Click **Refresh**
+  to re-check.
+- The URL field is pre-filled with the latest detected download URL.
+  You can edit it (e.g. to install an older version) — but the URL
+  **must** be on `https://xrcsimulator.org/`. The server enforces this
+  on every redirect hop to block SSRF/injection attempts.
+- Clicking **Update Now** runs this flow on the VM:
+  1. Download the zip to `/opt/xrc-simulator-backups/`.
+  2. Extract to a staging directory and sanity-check (binary +
+     `UnityPlayer.so` + `xRC Simulator_Data/` must all be present).
+  3. Stop the `xrc-simulator` service.
+  4. Snapshot the current install to
+     `/opt/xrc-simulator-backups/backup-<timestamp>/`.
+  5. Atomically swap the new install in (preserving your `server.env`,
+     `runserver.sh`, and `web-admin.py`).
+  6. Restart the service and verify it becomes active.
+  7. Prune old backups beyond `XRC_BACKUP_RETENTION`.
+- If anything fails after step 3, the previous install is **rolled
+  back automatically** and the service restarted.
+- The UI disables the Start/Stop/Restart/Change Game buttons while an
+  update is in progress; the API returns HTTP 409 for those calls too.
+
+### Daily Auto-Restart
+
+A systemd timer restarts the `xrc-simulator` service once a day to
+work around the engine's documented memory/physics drift over long
+uptime. Default schedule: **4:00 AM US Eastern** (`America/New_York`).
+
+```bash
+# Inspect next scheduled run
+systemctl list-timers xrc-simulator-restart.timer
+
+# Disable: set in .env and re-run ./deploy.sh
+XRC_DAILY_RESTART_ENABLED=false
+
+# Change schedule (24-hour HH:MM, Eastern): set in .env and re-run ./deploy.sh
+XRC_DAILY_RESTART_TIME=03:30
+```
+
+The timer skips firing if a web-UI update is in progress (it checks
+for `/run/xrc-update.lock`), so the two flows never collide.
 
 **Security Options:**
 - **Public access** (default): Set `WEB_ADMIN_BIND=0.0.0.0` — access restricted by NSG to `SSH_SOURCE_CIDR`
@@ -124,10 +178,21 @@ az vm start --resource-group xrc-simulator-rg --name xrc-simulator-vm
 
 Running `./deploy.sh` again is fully idempotent:
 - Infrastructure changes are applied incrementally
-- The xRC Simulator binary is re-downloaded (if URL changed) and the server config is updated
+- The xRC Simulator binary is re-downloaded from `XRC_DOWNLOAD_URL`
+  (so leave that pinned to your installed version if you've been
+  updating via the web UI — otherwise a redeploy will roll the binary
+  back to the URL in `.env`)
+- The latest `web-admin.py` is uploaded and the `xrc-web-admin`
+  service is restarted to pick it up
+- The `xrc-simulator-restart.timer` (daily restart) is reconciled to
+  the current `XRC_DAILY_RESTART_*` env values
+- `/opt/xrc-simulator-backups/` is created if missing
 - The systemd service is restarted with the new settings
 
-This means you can update `XRC_DOWNLOAD_URL`, `XRC_SERVER_PASSWORD`, or other settings in `.env` and simply re-run `./deploy.sh`.
+This means you can update `XRC_SERVER_PASSWORD` or other settings in
+`.env` and simply re-run `./deploy.sh`. For ongoing xRC server version
+upgrades, use the web UI instead — it preserves the install across
+redeploys without needing to keep `XRC_DOWNLOAD_URL` in sync.
 
 ## Cost Estimates
 
@@ -153,7 +218,13 @@ Azure Resource Group
 ├── Network Interface
 └── Virtual Machine (Ubuntu 22.04 LTS)
     ├── xRC Simulator (systemd service via setup-xrc.sh)
-    └── xRC Web Admin (systemd service on port 8080)
+    ├── xRC Web Admin (systemd service on port 8080)
+    └── Daily Restart Timer (systemd timer, 4 AM ET by default)
+
+Filesystem layout on the VM:
+
+    /opt/xrc-simulator/           Live install (binary, server.env, runserver.sh, web-admin.py)
+    /opt/xrc-simulator-backups/   Backups of previous installs (kept: XRC_BACKUP_RETENTION)
 ```
 
 ## Based On
